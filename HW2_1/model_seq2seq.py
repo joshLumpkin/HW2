@@ -1,8 +1,26 @@
-# Argument parsing
-parser = argparse.ArgumentParser(description="Generate captions for video data")
-parser.add_argument("data_dir", type=str, help="Test data directory")
-parser.add_argument("output_file", type=str, help="output file")
-args = parser.parse_args()
+import sys
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import numpy as np
+import json
+from collections import Counter
+from torch.utils.data import Dataset, DataLoader
+import torch.nn.functional as F
+from torch.optim.lr_scheduler import StepLR
+import matplotlib.pyplot as plt
+import os
+
+# needs two args
+if len(sys.argv) == 3:
+    feat_dir = sys.argv[1]
+    output_file = sys.argv[2]
+
+    print(f"Argument 1: {feat_dir}, Argument 2: {output_file}")
+else:
+    print("Please pass in two arguments.")
+    sys.exit(1)
+
 
 
 # loading jsons
@@ -38,12 +56,24 @@ class Vocabulary:
                     self.itos[idx] = word
                     idx += 1
 
+    def save_vocabulary(self, file_path):
+        with open(file_path, 'w') as file:
+            json.dump({'itos': self.itos, 'stoi': self.stoi}, file, indent=4)
+
     def numericalize(self, text):
         tokenized_text = clean_caption(text)
         return [
             self.stoi[token] if token in self.stoi else self.stoi["<UNK>"]
             for token in tokenized_text
         ]
+
+def load_vocabulary(file_path):
+    with open(file_path, 'r') as file:
+        data = json.load(file)
+    vocab = Vocabulary(freq_threshold=0)
+    vocab.itos = {int(k): v for k, v in data['itos'].items()}
+    vocab.stoi = data['stoi']
+    return vocab
 
 class VideoCaptionDataset(Dataset):
     def __init__(self, features_dir, annotations, vocab, max_length, transform=None):
@@ -89,13 +119,7 @@ def generate_caption(model, video_features, vocab, max_length):
             outputs = model(video_features, input_ids)
             next_word_id = outputs[0, -1].argmax(0)
             generated_caption_indices.append(next_word_id.item())
-
-            for idx in input_ids:
-                token = vocab.itos[idx.item()]
             input_ids = torch.cat([input_ids, next_word_id.unsqueeze(0)])
-
-            for idx in input_ids:
-                token = vocab.itos[idx.item()]
             
             # break if eos is generated
             if next_word_id == vocab.stoi["<EOS>"]:
@@ -108,36 +132,35 @@ def generate_caption(model, video_features, vocab, max_length):
 
 
 # training files
-features_dir = '../S2VT_assignment/MLDS_hw2_1_data/training_data/feat'
-training_data = load_json('../S2VT_assignment/MLDS_hw2_1_data/training_label.json')
+#features_dir = './MLDS_hw2_1_data/training_data/feat'
+#training_data = load_json('./MLDS_hw2_1_data/training_label.json')
 
 # flatten for vocab
-all_captions = [caption for item in training_data for caption in item['caption']]
+#all_captions = [caption for item in training_data for caption in item['caption']]
 
 # calling clean caption
-tokenized_captions = [clean_caption(caption) for caption in all_captions]
+#tokenized_captions = [clean_caption(caption) for caption in all_captions]
 
 # build vocabulary
-vocab = Vocabulary(freq_threshold=3)
-vocab.build_vocabulary(tokenized_captions)
-caption_example = training_data[0]['caption'][0]
-tokens_example = clean_caption(caption_example)
-numericalized_example = vocab.numericalize(caption_example)
+#vocab = Vocabulary(freq_threshold=3)
+#vocab.build_vocabulary(tokenized_captions)
+#vocab.save_vocabulary('vocabulary.json')
+vocab = load_vocabulary('vocabulary.json')
+#caption_example = training_data[0]['caption'][0]
+#tokens_example = clean_caption(caption_example)
+#numericalized_example = vocab.numericalize(caption_example)
 
 
 # max length for all padding
-max_caption_length = max(len(clean_caption(c)) for c in all_captions) + 2
+#max_caption_length = max(len(clean_caption(c)) for c in all_captions) + 2
+max_caption_length = 42
 
 # create dataset
-dataset = VideoCaptionDataset(features_dir, training_data, vocab, max_caption_length)
+#dataset = VideoCaptionDataset(features_dir, training_data, vocab, max_caption_length)
 
 # dataloader
-data_loader = DataLoader(dataset, batch_size=32, shuffle=True)
-
-for video_features, captions in data_loader:
-    print(f"Batch video features shape: {video_features.shape}")
-    print(f"Batch captions shape: {captions.shape}")
-    break
+#data_loader = DataLoader(dataset, batch_size=32, shuffle=True)
+data_loader = []
 
 class S2VTModel(nn.Module):
     def __init__(self, feature_dim, hidden_dim, vocab_size, max_seq_length=41):
@@ -164,26 +187,25 @@ class S2VTModel(nn.Module):
 
         return outputs
     
-vocab_size = vocab.get_vocab_size()
+#vocab_size = vocab.get_vocab_size()
+test_vocab_size = vocab.get_vocab_size()
 # predetermined
 feature_dim = 4096
 hidden_dim = 500
 
+model = S2VTModel(feature_dim, hidden_dim, test_vocab_size)
 
-def Train(data_loader, vocab, vocab_size, feature_dim, hidden_dim):
-    model = S2VTModel(feature_dim, hidden_dim, vocab_size)
+#use cuda if avail
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+model.train()
 
-    #use cuda if avail
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-    model.train()
+optimizer = optim.Adam(model.parameters(), lr=0.0001)
+criterion = nn.CrossEntropyLoss(ignore_index=vocab.stoi["<PAD>"])
+#scheduler = StepLR(optimizer, step_size=20, gamma=0.5)
 
-    optimizer = optim.Adam(model.parameters(), lr=0.0001)
-    criterion = nn.CrossEntropyLoss(ignore_index=vocab.stoi["<PAD>"])
-    #scheduler = StepLR(optimizer, step_size=20, gamma=0.5)
-
-    num_epochs = 30
-
+num_epochs = 30
+def train():
     for epoch in range(num_epochs):
         total_loss = 0
         for batch_idx, (video_features, captions) in enumerate(data_loader):
@@ -232,22 +254,21 @@ class VideoCaptionDatasetTest(Dataset):
 
         return torch.tensor(video_features, dtype=torch.float), file_name
 
-def Test(test_video_features, output_file):
-    model = S2VTModel(feature_dim, hidden_dim, vocab_size)
-    model.load_state_dict(torch.load("s2vt3_model.pth", map_location=device))
-    model = model.to(device)
-    #eval mode
-    model.eval()
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = S2VTModel(feature_dim, hidden_dim, test_vocab_size)
+model.load_state_dict(torch.load("s2vt3_model.pth", map_location=device))
+model = model.to(device)
+#eval mode
+model.eval()
 
+test_dataset = VideoCaptionDatasetTest(feat_dir)
+test_data_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
+max_length = 20
 
-    test_dataset, file_name = VideoCaptionDatasetTest(test_video_features)
-    test_data_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
-    max_length = 20
-
-    with open(args.output_file, 'w') as output_file:
-        with torch.no_grad():
-            for i, (test_video_features, _) in enumerate(test_data_loader):
-                test_video_features = test_video_features.to(device)
-                generated_caption = generate_caption(model, test_video_features, vocab, max_length)
-
-                output_file.write(f"{file_name}, {generated_caption}\n")
+with open(output_file, 'w') as file:
+    with torch.no_grad():
+        for i, (test_video_features, file_name) in enumerate(test_data_loader):
+            test_video_features = test_video_features.to(device)
+            generated_caption = generate_caption(model, test_video_features, vocab, max_length)
+            cleaned_file_name = file_name[0]
+            file.write(f"{cleaned_file_name}, {generated_caption}\n")
