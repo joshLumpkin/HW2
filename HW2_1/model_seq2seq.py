@@ -107,29 +107,30 @@ class VideoCaptionDataset(Dataset):
 
 #generates a caption
 def generate_caption(model, video_features, vocab, max_length):
-    #eval mode
     model.eval()
-
     with torch.no_grad():
         input_ids = torch.tensor([vocab.stoi["<BOS>"]], device=video_features.device)
+        outputs = model(video_features, input_ids)
         
         generated_caption_indices = []
         
-        for _ in range(max_length):
-            outputs = model(video_features, input_ids)
-            next_word_id = outputs[0, -1].argmax(0)
-            generated_caption_indices.append(next_word_id.item())
-            input_ids = torch.cat([input_ids, next_word_id.unsqueeze(0)])
-            
-            # break if eos is generated
+        for i in range(max_length):
+            # forwar pass
+            #print('input id ', input_ids)
+            #outputs = model(video_features, input_ids)
+            #print(max_length)
+            #print(f'outputs shape: {outputs.shape}')
+            # use last word for sequence
+            next_word_id = outputs[0, i].argmax(0)
+                #print(f"next_word_id: {next_word_id}")
+                #print(f"next_word_id: {next_word_id.item()}")
             if next_word_id == vocab.stoi["<EOS>"]:
                 break
-        
-        #convert words
+            
+            generated_caption_indices.append(next_word_id.item())
+            input_ids = torch.cat([input_ids, next_word_id.unsqueeze(0)])  
         generated_caption = ' '.join([vocab.itos[idx] for idx in generated_caption_indices if idx in vocab.itos])
-        
     return generated_caption
-
 
 # training files
 #features_dir = './MLDS_hw2_1_data/training_data/feat'
@@ -165,17 +166,17 @@ data_loader = []
 class S2VTModel(nn.Module):
     def __init__(self, feature_dim, hidden_dim, vocab_size, max_seq_length=41):
         super(S2VTModel, self).__init__()
-        self.encoder_lstm = nn.LSTM(feature_dim, hidden_dim, batch_first=True, num_layers=2, dropout=0.5)
+        self.encoder_lstm = nn.LSTM(feature_dim, hidden_dim, batch_first=True, num_layers=2, dropout=0.3)
         
-        self.decoder_lstm = nn.LSTM(hidden_dim, hidden_dim, batch_first=True, num_layers=2, dropout=0.5)
+        self.decoder_lstm = nn.LSTM(hidden_dim, hidden_dim, batch_first=True, num_layers=2, dropout=0.3)
         self.fc = nn.Linear(hidden_dim, vocab_size)
         self.max_seq_length = max_seq_length
 
     def forward(self, video_features, captions=None):
-        # encoder
+        # encoding
         _, (hidden, _) = self.encoder_lstm(video_features)
 
-        # decode
+        # decoding
         outputs = []
         step_input = torch.zeros(video_features.size(0), 1, hidden.size(2)).to(video_features.device)
         for _ in range(self.max_seq_length):
@@ -204,7 +205,7 @@ optimizer = optim.Adam(model.parameters(), lr=0.0001)
 criterion = nn.CrossEntropyLoss(ignore_index=vocab.stoi["<PAD>"])
 #scheduler = StepLR(optimizer, step_size=20, gamma=0.5)
 
-num_epochs = 30
+num_epochs = 75
 def train():
     for epoch in range(num_epochs):
         total_loss = 0
